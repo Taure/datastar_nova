@@ -1,0 +1,21 @@
+{application, datastar_nova, [
+    {description,
+        "Nova integration for the Datastar SDK — controller return handler and request signal reader."},
+    {vsn, "git"},
+    {registered, [datastar_nova_sup]},
+    {mod, {datastar_nova_app, []}},
+    {applications, [
+        kernel,
+        stdlib,
+        datastar,
+        nova
+    ]},
+    {env, []},
+    {modules, []},
+    {licenses, ["Apache-2.0"]},
+    {links, [
+        {"GitHub", "https://github.com/Taure/datastar_nova"},
+        {"Datastar", "https://data-star.dev"},
+        {"Nova", "https://novaframework.org"}
+    ]}
+]}.
