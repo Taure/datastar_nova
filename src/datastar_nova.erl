@@ -50,7 +50,10 @@ still call it explicitly.
 """.
 -spec register() -> ok | {error, atom()}.
 register() ->
-    nova_handlers:register_handler(datastar, {?MODULE, handle}).
+    %% Register an explicit /3 fun. Nova invokes return-handlers with 3 args
+    %% (RetObj, Callback, Req); its `{Mod, Fun}` form wraps to arity /4, which
+    %% mismatches and crashes with badarity on the current Nova master.
+    nova_handlers:register_handler(datastar, fun ?MODULE:handle/3).
 
 -doc """
 Nova handler for `{datastar, ...}` controller returns.
