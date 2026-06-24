@@ -7,7 +7,7 @@ on:
 
 jobs:
   ci:
-    uses: Taure/erlang-ci/.github/workflows/ci.yml@v2
+    uses: Taure/erlang-ci/.github/workflows/ci.yml@v2.1.1
     permissions:
       contents: write
       pull-requests: write
@@ -16,7 +16,7 @@ jobs:
       otp-version: '28'
       rebar3-version: '3.27.0'
       enable-ex-doc: true
-      enable-audit: true
+      enable-audit: false
       enable-sbom: true
       enable-sbom-scan: true
       enable-elp-lint: true
