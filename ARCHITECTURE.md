@@ -9,12 +9,23 @@ server-push streams).
 
 | Mode | Transport | Status |
 |---|---|---|
-| **One-shot** — action request → N patches → close | single HTTP response, body is a concatenated SSE stream | **Shipped (v1)** |
-| **Live stream** — long-lived server-push | Cowboy loop handler writing to a streamed response | **v2 (planned)** |
-| **PubSub fan-out** — one source → many subscribers | loop handlers subscribe to `nova_pubsub` topics | **v2 (planned)** |
+| **One-shot** — action request → N patches → close | single HTTP response, body is a concatenated SSE stream | **Shipped** |
+| **Live stream** — long-lived server-push | return-handler `stream_reply`s then holds the request process, writing frames | **Shipped** |
+| **PubSub fan-out** — one source → many subscribers | the held stream joins a `nova_pubsub` channel; `publish/2` broadcasts | **Shipped** |
 
-V1 covers the action/response flows that dominate the Datastar HTMX-style
-use case. V2 covers dashboards, live counters, and collaborative views.
+One-shot covers the action/response flows that dominate the Datastar
+HTMX-style use case; live stream covers dashboards, live counters, and
+collaborative views.
+
+> **Note — shipped live-stream differs from the original plan below.**
+> The Mode 2 section originally proposed a Cowboy `cowboy_loop` route via
+> Nova's `init/2` upgrade path. In practice `nova_router` only wires
+> `protocol => http | ws` (it errors on anything else), so the **shipped**
+> implementation (`datastar_nova_stream`) instead registers a `datastar_stream`
+> **return-handler** that `stream_reply`s and then holds the request process in
+> a receive loop — never returning, so Nova's buffered `render_response/2`
+> never fires. This is the proven `nova_liveboard_sse` pattern. The PubSub
+> fan-out and keepalive design below are unchanged and shipped as described.
 
 ---
 

@@ -2,6 +2,7 @@
 -eqwalizer(ignore).
 
 -include_lib("eunit/include/eunit.hrl").
+-include_lib("nova/include/nova_pubsub.hrl").
 
 %% -- handle/3 -----------------------------------------------------------------
 %%
@@ -87,3 +88,28 @@ read_signals_get_decodes_query_test() ->
     Req = #{method => ~"GET", qs => <<"datastar=%7B%22n%22%3A5%7D">>},
     {Result, _Req1} = datastar_nova:read_signals(Req),
     ?assertEqual({ok, #{~"n" => 5}}, Result).
+
+%% When nova_request_plugin has already decoded the body into `json`
+%% (consuming it), use that map rather than re-reading the empty body.
+read_signals_uses_predecoded_json_test() ->
+    Req = #{method => ~"POST", json => #{~"type" => ~"email", ~"value" => ~"a@b.com"}},
+    {Result, _Req1} = datastar_nova:read_signals(Req),
+    ?assertEqual({ok, #{~"type" => ~"email", ~"value" => ~"a@b.com"}}, Result).
+
+%% -- live stream pubsub fan-out ----------------------------------------------
+%%
+%% publish/2 must reach every process subscribed to the channel, carrying the
+%% frame as the envelope payload. That is the contract datastar_nova_stream's
+%% loop relies on (it writes #nova_pubsub{payload = Events} to the EventSource).
+
+publish_reaches_subscriber_test() ->
+    _ = pg:start(nova_scope),
+    ok = datastar_nova:subscribe(test_channel),
+    Frame = datastar:patch_elements(~"<li>row</li>", #{selector => ~"#list", mode => append}),
+    ok = datastar_nova:publish(test_channel, Frame),
+    receive
+        #nova_pubsub{channel = test_channel, payload = Payload} ->
+            ?assertEqual(Frame, Payload)
+    after 1000 ->
+        ?assert(false)
+    end.

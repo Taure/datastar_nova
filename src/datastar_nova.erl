@@ -33,13 +33,15 @@ one-shot.
 ## One-shot vs streaming
 
 `{datastar, Events}` delivers all events in a single HTTP response and
-closes. That covers action → patches → done flows. For long-lived
-server-push streams (live dashboards, PubSub-driven updates),
-see `ARCHITECTURE.md` in this repo — real streaming requires Cowboy's
-loop-handler upgrade path, which is planned as a v2 feature.
+closes. That covers action → patches → done flows.
+
+For long-lived server-push (live dashboards, PubSub-driven updates), a
+controller returns `{datastar_stream, Channel}` and `datastar_nova_stream`
+holds the connection open, writing every frame published with
+`publish/2`. See that module and `ARCHITECTURE.md`.
 """.
 
--export([register/0, handle/3, read_signals/1]).
+-export([register/0, handle/3, read_signals/1, subscribe/1, publish/2]).
 
 -doc """
 Register the `datastar` return tag with Nova's handler registry.
@@ -50,7 +52,33 @@ still call it explicitly.
 """.
 -spec register() -> ok | {error, atom()}.
 register() ->
-    nova_handlers:register_handler(datastar, {?MODULE, handle}).
+    %% Register explicit /3 funs. Nova invokes return-handlers with 3 args
+    %% (RetObj, Callback, Req); its `{Mod, Fun}` form wraps to arity /4, which
+    %% mismatches and crashes with badarity on the current Nova master.
+    _ = nova_handlers:register_handler(datastar, fun ?MODULE:handle/3),
+    nova_handlers:register_handler(datastar_stream, fun datastar_nova_stream:handle/3).
+
+-doc """
+Subscribe the calling process to a `nova_pubsub` channel.
+
+Rarely needed directly - `datastar_nova_stream` joins the channel for
+you. Exposed for processes that want to observe a channel themselves.
+""".
+-spec subscribe(atom()) -> ok.
+subscribe(Channel) ->
+    nova_pubsub:join(Channel).
+
+-doc """
+Publish Datastar events to every live stream on a channel.
+
+`Events` is any `iodata()` - typically `datastar:patch_elements/1,2` or
+`datastar:patch_signals/1,2` output. Call from anywhere in the app; each
+connected `datastar_nova_stream` on `Channel` writes the frame to its
+`EventSource`.
+""".
+-spec publish(atom(), iodata()) -> ok.
+publish(Channel, Events) ->
+    nova_pubsub:broadcast(Channel, ~"datastar", Events).
 
 -doc """
 Nova handler for `{datastar, ...}` controller returns.
@@ -87,7 +115,12 @@ handle({datastar, StatusCode, ExtraHeaders, Events}, _Callback, Req) ->
 Read Datastar signals out of a Nova request.
 
 For `GET` requests, decodes the `datastar` query parameter.
-For all other methods, reads the body (consuming it) and decodes.
+
+For other methods the signal store is the JSON body. If Nova has already
+decoded it (the `nova_request_plugin` with `decode_json_body => true`
+puts it under the `json` key, consuming the body), that map is used
+directly. Otherwise the body is read and decoded — so it works whether
+or not the json-decode plugin is enabled.
 
 Returns `{Result, Req}` — thread the returned `Req` through the rest of
 your controller so subsequent `cowboy_req:read_body/1` calls don't
@@ -103,6 +136,8 @@ read_signals(#{method := ~"GET"} = Req) ->
         #{datastar := undefined} -> {{error, missing}, Req};
         #{datastar := Json} -> {datastar:read_signals(Json), Req}
     end;
+read_signals(#{json := Signals} = Req) when is_map(Signals) ->
+    {{ok, Signals}, Req};
 read_signals(Req) ->
     {ok, Body, Req1} = cowboy_req:read_body(Req),
     {datastar:read_signals(Body), Req1}.

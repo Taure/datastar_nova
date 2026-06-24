@@ -6,8 +6,10 @@
 - Registers a Nova controller return handler for `{datastar, ...}`
   tuples — drop patches into your response by returning a list.
 - Reads Datastar signals out of any Nova request (GET query or body).
-- One-shot mode shipped; live-stream mode documented in
-  [ARCHITECTURE.md](ARCHITECTURE.md) and planned for v2.
+- **Live-stream** (`{datastar_stream, ...}`) — a long-lived SSE that
+  pushes `nova_pubsub`-published frames to connected pages.
+- Both one-shot and live-stream modes shipped; see
+  [ARCHITECTURE.md](ARCHITECTURE.md).
 
 ## Install
 
@@ -44,6 +46,31 @@ Variants:
 {datastar, 202, Events}                         %% custom status
 {datastar, 200, #{~"x-trace-id" => Tid}, Events}  %% custom status + headers
 ```
+
+## Live stream (server-push)
+
+A controller that returns `{datastar_stream, Channel}` holds the
+connection open as an SSE and writes every frame published to the
+`nova_pubsub` `Channel`. Pass initial events as a third element to paint
+the page on connect.
+
+```erlang
+%% GET /sse/messages — opened from the page with data-init="@get('/sse/messages')"
+stream(_Req) ->
+    {datastar_stream, messages, render_all()}.
+```
+
+Publish from anywhere — every connected stream on the channel writes it:
+
+```erlang
+%% e.g. when a new message arrives
+datastar_nova:publish(messages,
+    datastar:patch_elements(render_row(Msg),
+                            #{selector => ~"#messages", mode => append})).
+```
+
+Serve the page HTML (and its assets) with `Cache-Control: no-store`, and
+open the stream with Datastar's `data-init` (v1 has no `data-on-load`).
 
 ## Reading signals
 
