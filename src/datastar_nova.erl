@@ -33,13 +33,15 @@ one-shot.
 ## One-shot vs streaming
 
 `{datastar, Events}` delivers all events in a single HTTP response and
-closes. That covers action → patches → done flows. For long-lived
-server-push streams (live dashboards, PubSub-driven updates),
-see `ARCHITECTURE.md` in this repo — real streaming requires Cowboy's
-loop-handler upgrade path, which is planned as a v2 feature.
+closes. That covers action → patches → done flows.
+
+For long-lived server-push (live dashboards, PubSub-driven updates), a
+controller returns `{datastar_stream, Channel}` and `datastar_nova_stream`
+holds the connection open, writing every frame published with
+`publish/2`. See that module and `ARCHITECTURE.md`.
 """.
 
--export([register/0, handle/3, read_signals/1]).
+-export([register/0, handle/3, read_signals/1, subscribe/1, publish/2]).
 
 -doc """
 Register the `datastar` return tag with Nova's handler registry.
@@ -50,10 +52,33 @@ still call it explicitly.
 """.
 -spec register() -> ok | {error, atom()}.
 register() ->
-    %% Register an explicit /3 fun. Nova invokes return-handlers with 3 args
+    %% Register explicit /3 funs. Nova invokes return-handlers with 3 args
     %% (RetObj, Callback, Req); its `{Mod, Fun}` form wraps to arity /4, which
     %% mismatches and crashes with badarity on the current Nova master.
-    nova_handlers:register_handler(datastar, fun ?MODULE:handle/3).
+    _ = nova_handlers:register_handler(datastar, fun ?MODULE:handle/3),
+    nova_handlers:register_handler(datastar_stream, fun datastar_nova_stream:handle/3).
+
+-doc """
+Subscribe the calling process to a `nova_pubsub` channel.
+
+Rarely needed directly - `datastar_nova_stream` joins the channel for
+you. Exposed for processes that want to observe a channel themselves.
+""".
+-spec subscribe(atom()) -> ok.
+subscribe(Channel) ->
+    nova_pubsub:join(Channel).
+
+-doc """
+Publish Datastar events to every live stream on a channel.
+
+`Events` is any `iodata()` - typically `datastar:patch_elements/1,2` or
+`datastar:patch_signals/1,2` output. Call from anywhere in the app; each
+connected `datastar_nova_stream` on `Channel` writes the frame to its
+`EventSource`.
+""".
+-spec publish(atom(), iodata()) -> ok.
+publish(Channel, Events) ->
+    nova_pubsub:broadcast(Channel, ~"datastar", Events).
 
 -doc """
 Nova handler for `{datastar, ...}` controller returns.
