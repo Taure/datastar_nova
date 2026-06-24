@@ -89,6 +89,13 @@ read_signals_get_decodes_query_test() ->
     {Result, _Req1} = datastar_nova:read_signals(Req),
     ?assertEqual({ok, #{~"n" => 5}}, Result).
 
+%% When nova_request_plugin has already decoded the body into `json`
+%% (consuming it), use that map rather than re-reading the empty body.
+read_signals_uses_predecoded_json_test() ->
+    Req = #{method => ~"POST", json => #{~"type" => ~"email", ~"value" => ~"a@b.com"}},
+    {Result, _Req1} = datastar_nova:read_signals(Req),
+    ?assertEqual({ok, #{~"type" => ~"email", ~"value" => ~"a@b.com"}}, Result).
+
 %% -- live stream pubsub fan-out ----------------------------------------------
 %%
 %% publish/2 must reach every process subscribed to the channel, carrying the

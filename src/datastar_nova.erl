@@ -115,7 +115,12 @@ handle({datastar, StatusCode, ExtraHeaders, Events}, _Callback, Req) ->
 Read Datastar signals out of a Nova request.
 
 For `GET` requests, decodes the `datastar` query parameter.
-For all other methods, reads the body (consuming it) and decodes.
+
+For other methods the signal store is the JSON body. If Nova has already
+decoded it (the `nova_request_plugin` with `decode_json_body => true`
+puts it under the `json` key, consuming the body), that map is used
+directly. Otherwise the body is read and decoded — so it works whether
+or not the json-decode plugin is enabled.
 
 Returns `{Result, Req}` — thread the returned `Req` through the rest of
 your controller so subsequent `cowboy_req:read_body/1` calls don't
@@ -131,6 +136,8 @@ read_signals(#{method := ~"GET"} = Req) ->
         #{datastar := undefined} -> {{error, missing}, Req};
         #{datastar := Json} -> {datastar:read_signals(Json), Req}
     end;
+read_signals(#{json := Signals} = Req) when is_map(Signals) ->
+    {{ok, Signals}, Req};
 read_signals(Req) ->
     {ok, Body, Req1} = cowboy_req:read_body(Req),
     {datastar:read_signals(Body), Req1}.
