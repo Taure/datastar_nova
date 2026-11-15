@@ -87,6 +87,47 @@ parameter. For other methods they come from the body — that consumes
 the body, so **thread the returned `Req1`** through the rest of your
 controller.
 
+## Errors and line endings
+
+`datastar_nova` builds against
+[`datastar` v0.1.0](https://github.com/Taure/datastar/blob/v0.1.0/CHANGELOG.md).
+The SDK needs OTP 28 or later, so `datastar_nova` does too.
+
+Your code builds the events, with `datastar:patch_elements/1,2` and the
+other builders, before `datastar_nova` sees them. From v0.1.0 a builder
+raises `error:{invalid_option, Option, Reason}` or
+`error:{invalid_argument, Argument, Reason}` for a value it cannot
+write: an option key it does not take, a `selector` or `id` with a line
+break in it, pre-encoded signals that are not one JSON value, a script
+that contains `</script`. The SDK's module documentation lists every
+reason. `datastar_nova` neither catches nor rewrites these errors:
+
+| Where the event is built | What happens |
+|---|---|
+| In a controller, for `{datastar, ...}` or for the initial events of `{datastar_stream, ...}` | The controller raises and no return handler is called. Nova logs the crash and answers with status 500. |
+| In the argument of `datastar_nova:publish/2` | The publishing process raises and nothing is broadcast. Streams that are open on the channel are not affected. |
+
+Neither error holds the value that was refused. If a `selector` or an
+`id` comes from a request (a signal, a path binding, a query value),
+check it first, or catch the error and answer with status 400:
+
+```erlang
+remove_row(#{bindings := #{~"id" := RowId}}) ->
+    try datastar:remove_elements([~"#row-", RowId]) of
+        Event -> {datastar, Event}
+    catch
+        error:{invalid_option, selector, _Reason} -> {status, 400}
+    end.
+```
+
+`datastar_nova:read_signals/1` reads untrusted input and returns
+`{error, missing}`, `{error, {invalid_json, Reason}}` or
+`{error, not_an_object}` for a payload it cannot use.
+
+`\r\n`, `\r` and `\n` each end a line in streamed HTML, in a script and
+in pre-encoded signals. Text with a carriage return in it stays inside
+its event, and the browser receives every line break as `\n`.
+
 ## One-shot vs streaming
 
 The v1 handler delivers a batch of events as a single HTTP response and
