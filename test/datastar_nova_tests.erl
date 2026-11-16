@@ -96,6 +96,16 @@ read_signals_uses_predecoded_json_test() ->
     {Result, _Req1} = datastar_nova:read_signals(Req),
     ?assertEqual({ok, #{~"type" => ~"email", ~"value" => ~"a@b.com"}}, Result).
 
+read_signals_get_invalid_json_test() ->
+    Req = #{method => ~"GET", qs => ~"datastar=%7B%22n%22%3A"},
+    {Result, _Req1} = datastar_nova:read_signals(Req),
+    ?assertMatch({error, {invalid_json, _}}, Result).
+
+read_signals_get_not_an_object_test() ->
+    Req = #{method => ~"GET", qs => ~"datastar=%5B1%5D"},
+    {Result, _Req1} = datastar_nova:read_signals(Req),
+    ?assertEqual({error, not_an_object}, Result).
+
 %% -- live stream pubsub fan-out ----------------------------------------------
 %%
 %% publish/2 must reach every process subscribed to the channel, carrying the
@@ -112,4 +122,112 @@ publish_reaches_subscriber_test() ->
             ?assertEqual(Frame, Payload)
     after 1000 ->
         ?assert(false)
+    end.
+
+%% -- line endings -------------------------------------------------------------
+
+one_shot_body_keeps_carriage_return_inside_one_event_test() ->
+    Events = datastar:patch_elements(~"<pre>one\r\rtwo\r\nthree</pre>"),
+    {ok, Req} = datastar_nova:handle({datastar, Events}, undefined, ?EMPTY_REQ),
+    ?assertEqual(
+        [{~"datastar-patch-elements", ~"<pre>one\n\ntwo\nthree</pre>"}],
+        received_patches(maps:get(resp_body, Req))
+    ).
+
+live_stream_keeps_carriage_return_inside_one_event_test() ->
+    {ok, _} = application:ensure_all_started(cowboy),
+    _ = pg:start(nova_scope),
+    Req = #{pid => self(), streamid => 1, method => ~"GET"},
+    InitEvents = datastar:patch_elements(~"<ul id=\"rows\"></ul>"),
+    Stream = spawn_link(fun() ->
+        datastar_nova_stream:handle(
+            {datastar_stream, carriage_return_channel, InitEvents}, undefined, Req
+        )
+    end),
+    receive
+        {{_Connection, 1}, {headers, 200, Headers}} ->
+            ?assertEqual(~"text/event-stream", maps:get(~"content-type", Headers))
+    after 1000 ->
+        ?assert(false)
+    end,
+    ?assertEqual(
+        [{~"datastar-patch-elements", ~"<ul id=\"rows\"></ul>"}],
+        received_patches(written_frame(Stream))
+    ),
+    ok = datastar_nova:publish(
+        carriage_return_channel,
+        datastar:patch_elements(~"<li>one\rtwo</li>", #{selector => ~"#rows", mode => append})
+    ),
+    Published = written_frame(Stream),
+    unlink(Stream),
+    exit(Stream, kill),
+    ?assertEqual(
+        [{~"datastar-patch-elements", ~"<li>one\ntwo</li>"}],
+        received_patches(Published)
+    ).
+
+%% -- errors raised by the SDK -------------------------------------------------
+
+refused_option_raises_before_the_return_handler_test() ->
+    ?assertError(
+        {invalid_option, selector, line_break},
+        datastar_nova:handle(
+            {datastar, datastar:patch_elements(~"<p/>", #{selector => ~"#list\n#other"})},
+            undefined,
+            ?EMPTY_REQ
+        )
+    ).
+
+refused_argument_raises_in_the_publisher_and_nothing_is_broadcast_test() ->
+    _ = pg:start(nova_scope),
+    ok = datastar_nova:subscribe(refused_channel),
+    ?assertError(
+        {invalid_argument, signals, not_json},
+        datastar_nova:publish(refused_channel, datastar:patch_signals(~"{\"count\":"))
+    ),
+    receive
+        #nova_pubsub{channel = refused_channel} -> ?assert(false)
+    after 0 ->
+        ok
+    end.
+
+%% -- helpers ------------------------------------------------------------------
+
+written_frame(Stream) ->
+    receive
+        {{_Connection, 1}, {data, Stream, nofin, Frame}} ->
+            Stream ! {data_ack, self()},
+            Frame
+    after 1000 ->
+        error(no_frame_written)
+    end.
+
+%% Reads a stream the way an SSE client does: a line ends at CRLF, CR or LF
+%% and a blank line dispatches the event. Returns the type of each event
+%% with the HTML a Datastar client rebuilds from its `elements` lines.
+received_patches(Stream) ->
+    Lines = binary:split(iolist_to_binary(Stream), [~"\r\n", ~"\r", ~"\n"], [global]),
+    dispatched_events(Lines, ~"", []).
+
+dispatched_events([], _Type, _ElementsLines) ->
+    [];
+dispatched_events([~"" | Rest], _Type, []) ->
+    dispatched_events(Rest, ~"", []);
+dispatched_events([~"" | Rest], Type, ElementsLines) ->
+    Html = iolist_to_binary(lists:join(~"\n", lists:reverse(ElementsLines))),
+    [{Type, Html} | dispatched_events(Rest, ~"", [])];
+dispatched_events([Line | Rest], Type, ElementsLines) ->
+    case binary:split(Line, ~": ") of
+        [~"event", NewType] ->
+            dispatched_events(Rest, NewType, ElementsLines);
+        [~"data", Data] ->
+            dispatched_events(Rest, Type, elements_line(Data) ++ ElementsLines);
+        _OtherLine ->
+            dispatched_events(Rest, Type, ElementsLines)
+    end.
+
+elements_line(Data) ->
+    case binary:split(Data, ~" ") of
+        [~"elements", HtmlLine] -> [HtmlLine];
+        _OtherData -> []
     end.

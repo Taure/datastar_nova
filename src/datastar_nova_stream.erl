@@ -18,6 +18,10 @@ the loop stops, and the request process exits.
 A keepalive comment (`: ping`) is sent on idle to defeat proxy idle
 timeouts. The handler is registered (as an explicit `fun/3`) by
 `datastar_nova:register/0`.
+
+Initial and published events are written as given. They are built by
+the controller and by the caller of `datastar_nova:publish/2`, so a
+`datastar` builder that raises does so there and never in the stream.
 """.
 
 -include_lib("nova/include/nova_pubsub.hrl").

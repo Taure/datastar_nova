@@ -39,6 +39,38 @@ For long-lived server-push (live dashboards, PubSub-driven updates), a
 controller returns `{datastar_stream, Channel}` and `datastar_nova_stream`
 holds the connection open, writing every frame published with
 `publish/2`. See that module and `ARCHITECTURE.md`.
+
+## Errors
+
+Events are built by the caller, with the builders of `datastar`, before
+this module sees them. From `datastar` v0.1.0 a builder raises
+`error:{invalid_option, Option, Reason}` or
+`error:{invalid_argument, Argument, Reason}` for a value it cannot
+write; the documentation of the `datastar` module lists every reason.
+Nothing here catches or rewrites those errors:
+
+- A controller that builds the events of `{datastar, ...}`, or the
+  initial events of `{datastar_stream, Channel, InitEvents}`, raises
+  before it returns, so no return handler is called. Nova logs the
+  crash and answers with status 500.
+- A process that builds the events in the argument of `publish/2`
+  raises, and nothing is broadcast. Streams that are open on the
+  channel are not affected.
+
+Neither error holds the value that was refused. A `selector` or `id`
+taken from a request is refused when it has a line break or a NUL byte
+in it, so check such a value first, or catch the error and answer with
+status 400.
+
+`handle/3` and `publish/2` take events that are already built and
+write them as given. `read_signals/1` reads untrusted input and returns
+`{error, Reason}` for a payload that is not a JSON object.
+
+## Line endings
+
+`\r\n`, `\r` and `\n` each end a line in HTML, a script and
+pre-encoded signals. Text with a carriage return in it stays inside
+its event, and the browser receives every line break as `\n`.
 """.
 
 -export([register/0, handle/3, read_signals/1, subscribe/1, publish/2]).
@@ -75,6 +107,9 @@ Publish Datastar events to every live stream on a channel.
 `datastar:patch_signals/1,2` output. Call from anywhere in the app; each
 connected `datastar_nova_stream` on `Channel` writes the frame to its
 `EventSource`.
+
+`Events` is broadcast as given. A builder that raises does so in the
+calling process, before anything is broadcast.
 """.
 -spec publish(atom(), iodata()) -> ok.
 publish(Channel, Events) ->
@@ -92,6 +127,10 @@ Accepts three tuple shapes:
 
 `Events` is anything `iodata()`-compatible: typically a list of
 `datastar:patch_elements/...` / `datastar:patch_signals/...` outputs.
+
+`Events` becomes the response body as given. A builder that raises
+does so in the controller, which Nova answers with status 500, and
+this handler is not called.
 """.
 -spec handle(Return, function(), Req) -> {ok, Req} when
     Return ::
@@ -125,6 +164,10 @@ or not the json-decode plugin is enabled.
 Returns `{Result, Req}` — thread the returned `Req` through the rest of
 your controller so subsequent `cowboy_req:read_body/1` calls don't
 re-consume.
+
+`Result` is `{error, missing}` for a `GET` without the `datastar`
+parameter, `{error, {invalid_json, Reason}}` for a payload that is not
+JSON and `{error, not_an_object}` for JSON that is not an object.
 """.
 -spec read_signals(Req) -> {Result, Req} when
     Result ::
